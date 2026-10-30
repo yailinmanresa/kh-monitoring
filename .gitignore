@@ -1,0 +1,10 @@
+# Secrets and settings: never on GitHub
+.env
+
+# Local databases and logs
+*.db
+*.log
+
+# Python
+venv/
+__pycache__/
