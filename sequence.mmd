@@ -1,0 +1,25 @@
+sequenceDiagram
+    autonumber
+    participant M as monitor.py<br/>(on-prem server)
+    participant DC as Domain controller<br/>(DNS)
+    participant P as pfSense
+    participant G as Azure VPN Gateway<br/>(hub)
+    participant A as API (Flask)<br/>App Service (spoke)
+    participant S as Azure SQL Database<br/>(private endpoint)
+    M->>M: Measure CPU, memory, disk
+    M->>DC: What is the IP of the API?
+    DC-->>M: Private IP in the spoke (10.20.2.x)
+    M->>P: POST /measurements + X-API-Key (HTTPS)
+    P->>G: Encrypted IPsec tunnel (AES-256)
+    G->>A: Through the peering and the NSG (port 443)
+    A->>A: Check API key and validate data
+    alt Wrong or missing key
+        A-->>M: 401 Unauthorized
+    else Invalid data
+        A-->>M: 400 Bad Request
+    else Valid
+        A->>S: INSERT measurement (managed identity, port 1433)
+        S-->>A: OK
+        A-->>M: 201 Created (stored: 1)
+    end
+    A->>A: Write request to the log
