@@ -3,3 +3,4 @@ psutil
 requests
 python-dotenv
 pytest
+gunicorn

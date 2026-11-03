@@ -1,0 +1,19 @@
+sequenceDiagram
+    autonumber
+    participant M as monitor.py<br/>(library server)
+    participant V as VPN tunnel<br/>(encrypted)
+    participant A as API<br/>(in Azure)
+    participant D as Database<br/>(Azure SQL)
+    M->>M: Measure CPU: 23.5%
+    M->>V: Send measurement + API key
+    V->>A: Deliver it safely to Azure
+    A->>A: Right key? Correct data?
+    alt Yes
+        A->>D: Save the measurement
+        D-->>A: Saved
+        A-->>M: 201: stored
+    else Wrong key
+        A-->>M: 401: not allowed
+    else Wrong data (for example 150%)
+        A-->>M: 400: wrong data
+    end
