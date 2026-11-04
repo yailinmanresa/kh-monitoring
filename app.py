@@ -1,7 +1,11 @@
 """Knowledge Hub monitoring API.
 
 Receives measurements from monitor.py and stores them in a database.
-For now it uses SQLite on my laptop; later it moves to Azure SQL.
+
+Two database modes:
+    - SQLite (a local file): on my laptop, for testing. Used when SQL_SERVER is not set.
+    - Azure SQL Database: in Azure. Used when SQL_SERVER is set. The API logs in
+      with its managed identity, so there is no database password anywhere.
 
 Endpoints:
     GET  /health                        check that the API is running
@@ -24,7 +28,9 @@ from flask import Flask, jsonify, request
 load_dotenv()  # reads the settings from the .env file
 
 API_KEY = os.environ.get("API_KEY")
-DB_FILE = os.environ.get("DB_FILE", "api.db")
+DB_FILE = os.environ.get("DB_FILE", "api.db")      # SQLite file (laptop)
+SQL_SERVER = os.environ.get("SQL_SERVER")           # e.g. sql-kh-monitoring-yailin01.database.windows.net
+SQL_DATABASE = os.environ.get("SQL_DATABASE", "sqldb-kh-monitoring")
 LOG_FILE = "api.log"
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 ALLOWED_METRICS = {"cpu-usage", "memory-usage", "disk-usage"}
@@ -59,9 +65,22 @@ def log_request(response):
 
 
 def get_db():
-    """Open the database and create the table if it doesn't exist yet."""
+    """Open the database: Azure SQL when SQL_SERVER is set, otherwise SQLite."""
+    if SQL_SERVER:
+        import pyodbc  # only needed in Azure
+
+        connection_string = (
+            "Driver={ODBC Driver 18 for SQL Server};"
+            f"Server=tcp:{SQL_SERVER},1433;"
+            f"Database={SQL_DATABASE};"
+            "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+            "Authentication=ActiveDirectoryMsi"  # log in with the managed identity
+        )
+        # The table is created once by setup_database.sql, so the API itself
+        # only needs read and write rights (least privilege).
+        return pyodbc.connect(connection_string)
+
     connection = sqlite3.connect(DB_FILE)
-    connection.row_factory = sqlite3.Row
     connection.execute(
         "CREATE TABLE IF NOT EXISTS measurements ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -117,12 +136,19 @@ def add_measurements():
             return jsonify(error=error), 400
 
     connection = get_db()
-    with connection:  # saves (commits) everything, or nothing if something fails
-        connection.executemany(
+    try:
+        cursor = connection.cursor()
+        cursor.executemany(
             "INSERT INTO measurements (timestamp, host, metric, value) VALUES (?, ?, ?, ?)",
             [(m["timestamp"], m["host"].strip(), m["metric"], m["value"]) for m in measurements],
         )
-    connection.close()
+        connection.commit()  # save everything at once
+    except Exception:
+        connection.rollback()  # save nothing if something went wrong
+        logging.exception("Could not store measurements")
+        return jsonify(error="could not store the measurements"), 500
+    finally:
+        connection.close()
     logging.info("Stored %d measurement(s)", len(measurements))
     return jsonify(stored=len(measurements)), 201
 
@@ -132,13 +158,18 @@ def list_measurements():
     start = request.args.get("start", "0000-01-01")
     end = request.args.get("end", "9999-12-31")
     connection = get_db()
-    rows = connection.execute(
-        "SELECT timestamp, host, metric, value FROM measurements"
-        " WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
-        (start, end),
-    ).fetchall()
-    connection.close()
-    return jsonify([dict(row) for row in rows])
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT timestamp, host, metric, value FROM measurements"
+            " WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+            (start, end),
+        )
+        columns = [column[0] for column in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        connection.close()
+    return jsonify(rows)
 
 
 if __name__ == "__main__":

@@ -154,10 +154,34 @@ if (Test-AzResource @("network", "private-endpoint", "dns-zone-group", "show", "
         "--zone-name", "sql", "--output", "none") | Out-Null
 }
 
+# 6b. Make sure the DNS record really exists ("phone book" entry: server name -> private IP).
+#     During testing the zone group existed but the record was missing, so the API got
+#     "No address associated with hostname". This adds the record if it is not there.
+$privateIpForDns = Invoke-Az "Looking up the private IP for DNS" @(
+    "network", "private-endpoint", "show", "--resource-group", $DataGroup, "--name", $EndpointName,
+    "--query", "customDnsConfigs[0].ipAddresses[0]", "--output", "tsv")
+$record = & az network private-dns record-set a show --resource-group $NetworkGroup --zone-name $DnsZone `
+    --name $ServerName --query "aRecords[0].ipv4Address" --output tsv --only-show-errors 2>$null
+if ($record -eq $privateIpForDns) {
+    Skip "DNS record $ServerName -> $privateIpForDns"
+} else {
+    Invoke-Az "Adding DNS record $ServerName -> $privateIpForDns" @(
+        "network", "private-dns", "record-set", "a", "add-record", "--resource-group", $NetworkGroup,
+        "--zone-name", $DnsZone, "--record-set-name", $ServerName, "--ipv4-address", $privateIpForDns,
+        "--output", "none") | Out-Null
+}
+
 # 7. No more public access to the SQL server
 Invoke-Az "Turning off public network access on $ServerName" @(
     "sql", "server", "update", "--resource-group", $DataGroup, "--name", $ServerName,
     "--enable-public-network", "false", "--output", "none") | Out-Null
+
+# 7b. Connection policy Proxy: all traffic stays on port 1433.
+#     With the default policy (Redirect), connections from inside Azure are sent on
+#     to ports 11000-11999, which my NSG blocks (rule 4000), so the login times out.
+Invoke-Az "Setting the SQL connection policy to Proxy (port 1433 only)" @(
+    "sql", "server", "conn-policy", "update", "--resource-group", $DataGroup, "--server", $ServerName,
+    "--connection-type", "Proxy", "--output", "none") | Out-Null
 
 # 8. Show the result
 $privateIp = Invoke-Az "Looking up the private IP" @(

@@ -8,7 +8,8 @@
     3. Creates a Linux App Service plan (Basic B1) and a Python web app.
     4. Turns on HTTPS only and a system-assigned managed identity.
     5. Connects the web app to snet-app in the spoke VNet (VNet integration).
-    6. Puts the API key from .env in the app settings (never in the code).
+    6. Puts the API key from .env and the Azure SQL server name in the app
+       settings (never in the code). With SQL_SERVER set, the API uses Azure SQL.
     7. Uploads app.py and requirements.txt; Azure installs the packages.
 
     Safe to run more than once: existing resources are skipped, and the
@@ -27,7 +28,9 @@ param(
     [string]$PlanName      = "asp-kh-monitoring",
     [string]$AppName       = "app-kh-monitoring-yailin01",
     [string]$Sku           = "B1",
-    [string]$Runtime       = "PYTHON:3.12"
+    [string]$Runtime       = "PYTHON:3.12",
+    [string]$SqlServer     = "sql-kh-monitoring-yailin01.database.windows.net",
+    [string]$SqlDatabase   = "sqldb-kh-monitoring"
 )
 
 $Tags = @("project=knowledgehub-cs2", "environment=lab", "owner=admin", "costcenter=it")
@@ -142,7 +145,13 @@ if ($integrated) {
 Invoke-Az "Saving the API key in the app settings (not shown)" @(
     "webapp", "config", "appsettings", "set", "--resource-group", $AppGroup, "--name", $AppName,
     "--settings", "API_KEY=$apiKey", "SCM_DO_BUILD_DURING_DEPLOYMENT=true",
+    "SQL_SERVER=$SqlServer", "SQL_DATABASE=$SqlDatabase",
     "--output", "none") | Out-Null
+
+# Changing app settings restarts the app, including the deployment service (Kudu).
+# Uploading straight away can then fail with HTTP 502, so wait until it is back.
+Write-Host "==> Waiting 60 seconds for the app to restart after the settings change" -ForegroundColor Cyan
+Start-Sleep -Seconds 60
 
 # 10. Upload the code (only app.py and requirements.txt)
 $zip = Join-Path $env:TEMP "kh-monitoring-deploy.zip"
