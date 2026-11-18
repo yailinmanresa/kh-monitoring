@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Knowledge Hub Monitoring</title>
+  <style>
+    body  { font-family: Segoe UI, Arial, sans-serif; margin: 30px; background: #7EA6E0; }
+    table { border-collapse: collapse; background: white; }
+    th, td { border: 1px solid #ccc; padding: 6px 12px; }
+    th    { background: #eef; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <h1>Knowledge Hub Monitoring</h1>
+  <form method="get">
+    From: <input type="datetime-local" name="start" value="{{ start }}">
+    To: <input type="datetime-local" name="end" value="{{ end }}">
+    <button type="submit">Filter</button>
+    <a href="/">Show all</a>
+  </form>
+  <p>{{ measurements|length }} measurement(s) shown</p>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+
+  <table>
+    <tr><th>Time</th><th>Host</th><th>Metric</th><th>Value (%)</th></tr>
+    {% for m in measurements %}
+      <tr>
+        <td>{{ m.timestamp }}</td>
+        <td>{{ m.host }}</td>
+        <td>{{ m.metric }}</td>
+        <td>{{ m.value }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>
