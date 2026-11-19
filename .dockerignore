@@ -1,0 +1,8 @@
+.env
+venv/
+*.db
+*.log
+__pycache__/
+.git/
+.pytest_cache/
+*.docx
