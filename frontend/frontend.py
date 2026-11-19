@@ -1,35 +1,89 @@
 """Flask frontend for The Knowledge Hub monitoring app.
-Gets the measurements from the API and shows them as a web page."""
-
+Users sign in with Microsoft Entra ID (with MFA) before they can see the measurements."""
 import os
+from functools import wraps
 
+import msal
 import requests
 from dotenv import load_dotenv
-from flask import Flask, render_template, request  # NEW: request reads the filter from the URL
+from flask import Flask, redirect, render_template, request, session, url_for
 
-load_dotenv()  # read settings from a .env file, if there is one
+load_dotenv()
 
-# Settings come from environment variables, not from the code (secure + flexible)
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 API_KEY = os.environ.get("API_KEY")
+CLIENT_ID = os.environ.get("CLIENT_ID")
+CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
+TENANT_ID = os.environ.get("TENANT_ID")
+AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+SCOPES = ["User.Read"]
 
 app = Flask(__name__)
+app.secret_key = os.environ["FLASK_SECRET_KEY"]       # locks the session cookie
+app.config["SESSION_COOKIE_HTTPONLY"] = True          # JavaScript can't read the cookie
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+def msal_app():
+    """The MSAL client that talks to Entra ID for this app registration."""
+    return msal.ConfidentialClientApplication(
+        CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
+    )
+
+
+def login_required(view):
+    """Only signed-in users may open the page; others go to /login."""
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not session.get("user"):
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+    return wrapper
+
+
+@app.route("/login")
+def login():
+    # Start the login: Entra ID shows the sign-in page (with MFA)
+    flow = msal_app().initiate_auth_code_flow(
+        SCOPES, redirect_uri=url_for("authorized", _external=True)
+    )
+    session["flow"] = flow
+    return redirect(flow["auth_uri"])
+
+
+@app.route("/getAToken")
+def authorized():
+    # Entra ID sends the user back here with a code; swap it for a token
+    try:
+        result = msal_app().acquire_token_by_auth_code_flow(
+            session.get("flow", {}), request.args
+        )
+    except ValueError:  # the state doesn't match: start again
+        return redirect(url_for("login"))
+    if "error" in result:
+        return f"Login failed: {result.get('error_description', result['error'])}", 401
+    session.pop("flow", None)
+    session["user"] = result.get("id_token_claims")  # name and email of the user
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(f"{AUTHORITY}/oauth2/v2.0/logout")
 
 
 def to_api_time(value):
-    """NEW: turn the browser's '2026-11-18T10:00' into the API's '2026-11-18 10:00:00'."""
     if not value:
         return None
     return value.replace("T", " ") + ":00"
 
 
 @app.route("/")
+@login_required
 def dashboard():
-    """Home page: ask the API for the measurements and show them."""
-    # NEW: read the filter from the URL, e.g. /?start=2026-11-18T10:00&end=2026-11-18T12:00
     start = request.args.get("start", "")
     end = request.args.get("end", "")
-
     params = {}
     if start:
         params["start"] = to_api_time(start)
@@ -41,9 +95,9 @@ def dashboard():
     try:
         response = requests.get(
             API_URL + "/measurements",
-            headers={"X-API-Key": API_KEY},  # the API only answers with the right key
-            params=params,                   # NEW: send the time period to the API
-            timeout=10,                      # don't wait forever if the API is down
+            headers={"X-API-Key": API_KEY},
+            params=params,
+            timeout=10,
         )
         if response.status_code == 200:
             measurements = response.json()
@@ -52,10 +106,15 @@ def dashboard():
     except requests.RequestException:
         error = "The API can't be reached right now."
 
-    # Newest first
     measurements.sort(key=lambda m: m["timestamp"], reverse=True)
-    return render_template("dashboard.html", measurements=measurements, error=error,
-                           start=start, end=end)  # NEW: keep the chosen times in the form
+    return render_template(
+        "dashboard.html",
+        measurements=measurements,
+        error=error,
+        start=start,
+        end=end,
+        user=session["user"],
+    )
 
 
 if __name__ == "__main__":

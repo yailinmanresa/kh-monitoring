@@ -13,6 +13,7 @@
 </head>
 <body>
   <h1>Knowledge Hub Monitoring</h1>
+<p>Signed in as {{ user.name }} ({{ user.preferred_username }}) · <a href="/logout">Log out</a></p>
   <form method="get">
     From: <input type="datetime-local" name="start" value="{{ start }}">
     To: <input type="datetime-local" name="end" value="{{ end }}">
